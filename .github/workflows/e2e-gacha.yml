@@ -34,11 +34,56 @@ jobs:
         run: |
           python -m playwright install --with-deps
 
-      - name: Run pytest
-        env:
-          CI: "true"
+      - name: Run pytest with JUnit report
+        # 成功でも失敗でも後続で結果を集計したいので always() で集計ステップを動かす
         run: |
-          pytest -v test_gacha.py
+          pytest -v test_gacha.py --junitxml=report.xml
+
+      - name: Summarize test results
+        if: always()
+        run: |
+          python - << 'PY'
+          import xml.etree.ElementTree as ET
+          import os
+
+          # デフォルト値
+          tests = failures = errors = skipped = 0
+          failed_tests = []
+
+          try:
+              tree = ET.parse('report.xml')
+              root = tree.getroot()
+              tests = int(root.attrib.get('tests', 0))
+              failures = int(root.attrib.get('failures', 0))
+              errors = int(root.attrib.get('errors', 0))
+              skipped = int(root.attrib.get('skipped', 0))
+
+              for case in root.iter('testcase'):
+                  has_problem = False
+                  for tag in ('failure', 'error'):
+                      if case.find(tag) is not None:
+                          has_problem = True
+                  if has_problem:
+                      classname = case.attrib.get('classname', '')
+                      name = case.attrib.get('name', '')
+                      failed_tests.append(f"{classname}::{name}")
+          except FileNotFoundError:
+              # report.xml がない場合（pytest自体が動いてない等）
+              pass
+
+          passed = tests - failures - errors - skipped
+          failed_count = failures + errors
+
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f"TEST_TOTAL={tests}\n")
+              f.write(f"TEST_PASSED={passed}\n")
+              f.write(f"TEST_FAILED={failed_count}\n")
+              f.write(f"TEST_SKIPPED={skipped}\n")
+              if failed_tests:
+                  f.write("FAILED_TESTS=" + " , ".join(failed_tests) + "\n")
+              else:
+                  f.write("FAILED_TESTS=なし\n")
+          PY
 
       - name: Upload screenshots
         if: always()
@@ -47,22 +92,48 @@ jobs:
           name: gacha-screenshots
           path: "*.png"
 
-      - name: Upload videos
+      - name: Notify Slack
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gacha-videos
-          path: videos/**/*.webm
-
-      - name: Slack notification (always)
-        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO_NAME: ${{ github.repository }}
+          JOB_STATUS: ${{ job.status }}
         run: |
-          if [ "${{ job.status }}" = "success" ]; then
-            MESSAGE="🎉 E2Eテスト成功しました！"
-          else
-            MESSAGE="❌ E2Eテストが失敗しました！"
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL is not set. Skipping Slack notification."
+            exit 0
           fi
 
-          curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"${MESSAGE}\nリポジトリ: $GITHUB_REPOSITORY\n実行ログ: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}" \
-            ${{ secrets.SLACK_WEBHOOK_URL }}
+          if [ "$JOB_STATUS" = "success" ]; then
+            EMOJI=":tada:"
+            TITLE="E2Eテスト成功"
+          else
+            EMOJI=":x:"
+            TITLE="E2Eテスト失敗"
+          fi
+
+          TEXT="$EMOJI *$TITLE*\n"
+          TEXT+="リポジトリ: \`$REPO_NAME\`\n"
+          TEXT+="結果: ${TEST_PASSED:-0} 件成功 / ${TEST_FAILED:-0} 件失敗 / 合計 ${TEST_TOTAL:-0} 件（スキップ ${TEST_SKIPPED:-0}）\n"
+          TEXT+="失敗テスト: ${FAILED_TESTS}\n"
+          TEXT+="実行ログ: <$GITHUB_RUN_URL|GitHub Actions Run>\n"
+          TEXT+="スクリーンショット・詳細ログ: Actions画面の *Artifacts* と *Logs* をご確認ください。"
+
+          # JSON ペイロードをファイルに出力してPOST
+          cat <<EOF > payload.json
+          {
+            "text": "$EMOJI $TITLE",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "$(echo -e "$TEXT")"
+                }
+              }
+            ]
+          }
+          EOF
+
+          curl -X POST -H 'Content-type: application/json' --data @payload.json "$SLACK_WEBHOOK_URL"
