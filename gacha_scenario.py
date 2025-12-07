@@ -10,14 +10,20 @@ def run_gacha_scenario(draw_count: int = 3) -> bool:
     成功したら True、どこかで失敗したら False を返す。
     """
     success = False
+    browser = None
+    context = None
 
     with sync_playwright() as p:
         # CI環境（GitHub Actions）では headless=True、ローカルでは False
         is_ci = os.getenv("CI") == "true"
-        browser = p.chromium.launch(headless=is_ci)
-        page = browser.new_page()
 
         try:
+            browser = p.chromium.launch(headless=is_ci)
+
+            # 🎥 動画録画用コンテキスト（videos/ 配下に .webm を保存）
+            context = browser.new_context(record_video_dir="videos/")
+            page = context.new_page()
+
             print(f"\n=== ガチャシナリオ開始：{draw_count} 回 ===")
 
             # ① ページアクセス
@@ -81,7 +87,11 @@ def run_gacha_scenario(draw_count: int = 3) -> bool:
             return success
 
         finally:
-            browser.close()
+            # 動画クローズ → ブラウザクローズ
+            if context is not None:
+                context.close()
+            if browser is not None:
+                browser.close()
 
 
 if __name__ == "__main__":

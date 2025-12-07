@@ -1,14 +1,14 @@
 name: E2E Gacha Tests
 
 on:
-  # 手動実行用ボタン
+  # 手動実行ボタン
   workflow_dispatch:
 
   # main ブランチに push されたら実行
   push:
     branches: [ main ]
 
-  # 毎日 21:00 UTC に実行（JST だと毎朝 6:00 頃）
+  # 毎日 21:00 UTC（日本時間 06:00頃）に実行
   schedule:
     - cron: "0 21 * * *"
 
@@ -35,13 +35,34 @@ jobs:
           python -m playwright install --with-deps
 
       - name: Run pytest
+        env:
+          CI: "true"
         run: |
           pytest -v test_gacha.py
 
-      # 失敗したときも含めてスクショをアーティファクトとして保存
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gacha-screenshots
           path: "*.png"
+
+      - name: Upload videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gacha-videos
+          path: videos/**/*.webm
+
+      - name: Slack notification (always)
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            MESSAGE="🎉 E2Eテスト成功しました！"
+          else
+            MESSAGE="❌ E2Eテストが失敗しました！"
+          fi
+
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"${MESSAGE}\nリポジトリ: $GITHUB_REPOSITORY\n実行ログ: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
