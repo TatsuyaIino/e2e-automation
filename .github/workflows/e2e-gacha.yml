@@ -38,59 +38,70 @@ jobs:
         run: |
           pytest -v test_gacha.py --junitxml=report.xml
 
-      - name: Summarize test results
-        if: always()
-        run: |
-          python - << 'PY'
-          import xml.etree.ElementTree as ET
-          import os
-
-          tests = failures = errors = skipped = 0
-          failed_tests = []
-
-          try:
-              tree = ET.parse('report.xml')
-              root = tree.getroot()
-
-              # ルートが <testsuite> の場合
-              if root.tag == "testsuite":
-                  suites = [root]
-              # ルートが <testsuites> の場合（複数テストスイート）
-              elif root.tag == "testsuites":
-                  suites = list(root)
-              else:
-                  suites = []
-
-              for suite in suites:
-                  tests += int(suite.attrib.get('tests', 0))
-                  failures += int(suite.attrib.get('failures', 0))
-                  errors += int(suite.attrib.get('errors', 0))
-                  skipped += int(suite.attrib.get('skipped', 0))
-
-                  for case in suite.iter('testcase'):
-                      has_problem = False
-                      for tag in ('failure', 'error'):
-                          if case.find(tag) is not None:
-                              has_problem = True
-                      if has_problem:
-                          classname = case.attrib.get('classname', '')
-                          name = case.attrib.get('name', '')
-                          failed_tests.append(f"{classname}::{name}")
-
-          except FileNotFoundError:
-              # report.xml が無い場合は0件のまま
-              pass
-
-          passed = tests - failures - errors - skipped
-          failed_count = failures + errors
-
-          with open(os.environ['GITHUB_ENV'], 'a') as f:
-              f.write(f"TEST_TOTAL={tests}\n")
-              f.write(f"TEST_PASSED={passed}\n")
-              f.write(f"TEST_FAILED={failed_count}\n")
-              f.write(f"TEST_SKIPPED={skipped}\n")
-              f.write("FAILED_TESTS=" + (", ".join(failed_tests) if failed_tests else "なし") + "\n")
-          PY
+          - name: Summarize test results
+          if: always()
+          run: |
+            python - << 'PY'
+            import xml.etree.ElementTree as ET
+            import os
+  
+            tests = failures = errors = skipped = 0
+            all_tests = []
+            failed_tests = []
+  
+            try:
+                tree = ET.parse('report.xml')
+                root = tree.getroot()
+  
+                # ルートが <testsuite> の場合
+                if root.tag == "testsuite":
+                    suites = [root]
+                # ルートが <testsuites> の場合（複数テストスイート）
+                elif root.tag == "testsuites":
+                    suites = list(root)
+                else:
+                    suites = []
+  
+                for suite in suites:
+                    tests += int(suite.attrib.get('tests', 0))
+                    failures += int(suite.attrib.get('failures', 0))
+                    errors += int(suite.attrib.get('errors', 0))
+                    skipped += int(suite.attrib.get('skipped', 0))
+  
+                    for case in suite.iter('testcase'):
+                        name = case.attrib.get('name', '')
+                        classname = case.attrib.get('classname', '')
+                        full_name = f"{classname}::{name}" if classname else name
+                        all_tests.append(full_name)
+  
+                        has_problem = False
+                        for tag in ('failure', 'error'):
+                            if case.find(tag) is not None:
+                                has_problem = True
+                        if has_problem:
+                            failed_tests.append(full_name)
+  
+            except FileNotFoundError:
+                # report.xml が無い場合は0件のまま
+                pass
+  
+            passed = tests - failures - errors - skipped
+            failed_count = failures + errors
+  
+            # 成功したテスト一覧
+            passed_tests = [t for t in all_tests if t not in failed_tests]
+  
+            def join_or_none(items):
+                return ", ".join(items) if items else "なし"
+  
+            with open(os.environ['GITHUB_ENV'], 'a') as f:
+                f.write(f"TEST_TOTAL={tests}\n")
+                f.write(f"TEST_PASSED={passed}\n")
+                f.write(f"TEST_FAILED={failed_count}\n")
+                f.write(f"TEST_SKIPPED={skipped}\n")
+                f.write("FAILED_TESTS=" + join_or_none(failed_tests) + "\n")
+                f.write("PASSED_TESTS=" + join_or_none(passed_tests) + "\n")
+            PY  
 
       - name: Upload screenshots and videos
         if: always()
@@ -101,44 +112,46 @@ jobs:
             *.png
             videos/**
 
-      - name: Notify Slack
-        if: always()
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          REPO_NAME: ${{ github.repository }}
-          JOB_STATUS: ${{ job.status }}
-          TEST_TOTAL: ${{ env.TEST_TOTAL }}
-          TEST_PASSED: ${{ env.TEST_PASSED }}
-          TEST_FAILED: ${{ env.TEST_FAILED }}
-          TEST_SKIPPED: ${{ env.TEST_SKIPPED }}
-          FAILED_TESTS: ${{ env.FAILED_TESTS }}
-        run: |
-          if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "SLACK_WEBHOOK_URL is not set. Skipping Slack notification."
-            exit 0
-          fi
-
-          if [ "$JOB_STATUS" = "success" ]; then
-            EMOJI=":tada:"
-            TITLE="E2Eテスト成功"
-          else
-            EMOJI=":x:"
-            TITLE="E2Eテスト失敗"
-          fi
-
-          # \n を含んだ文字列にしておく（JSON上で改行として解釈される）
-          TEXT="${EMOJI} *${TITLE}*\\n"
-          TEXT+="リポジトリ: \`${REPO_NAME}\`\\n"
-          TEXT+="結果: ${TEST_PASSED:-0} 件成功 / ${TEST_FAILED:-0} 件失敗 / 合計 ${TEST_TOTAL:-0} 件（スキップ ${TEST_SKIPPED:-0}）\\n"
-          TEXT+="失敗テスト: ${FAILED_TESTS}\\n"
-          TEXT+="実行ログ: <${GITHUB_RUN_URL}|GitHub Actions Run>\\n"
-          TEXT+="スクリーンショット・詳細ログ: Actions画面の *Artifacts* と *Logs* をご確認ください。"
-
-          cat <<EOF > payload.json
-          {
-            "text": "$TEXT"
-          }
-          EOF
-
-          curl -X POST -H 'Content-type: application/json' --data @payload.json "$SLACK_WEBHOOK_URL"
+            - name: Notify Slack
+            if: always()
+            env:
+              SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+              GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              REPO_NAME: ${{ github.repository }}
+              JOB_STATUS: ${{ job.status }}
+              TEST_TOTAL: ${{ env.TEST_TOTAL }}
+              TEST_PASSED: ${{ env.TEST_PASSED }}
+              TEST_FAILED: ${{ env.TEST_FAILED }}
+              TEST_SKIPPED: ${{ env.TEST_SKIPPED }}
+              FAILED_TESTS: ${{ env.FAILED_TESTS }}
+              PASSED_TESTS: ${{ env.PASSED_TESTS }}
+            run: |
+              if [ -z "$SLACK_WEBHOOK_URL" ]; then
+                echo "SLACK_WEBHOOK_URL is not set. Skipping Slack notification."
+                exit 0
+              fi
+    
+              if [ "$JOB_STATUS" = "success" ]; then
+                EMOJI=":tada:"
+                TITLE="E2Eテスト成功"
+              else
+                EMOJI=":x:"
+                TITLE="E2Eテスト失敗"
+              fi
+    
+              TEXT="${EMOJI} *${TITLE}*\\n"
+              TEXT+="リポジトリ: \`${REPO_NAME}\`\\n"
+              TEXT+="結果: ${TEST_PASSED:-0} 件成功 / ${TEST_FAILED:-0} 件失敗 / 合計 ${TEST_TOTAL:-0} 件（スキップ ${TEST_SKIPPED:-0}）\\n"
+              TEXT+="成功ケース: ${PASSED_TESTS}\\n"
+              TEXT+="失敗ケース: ${FAILED_TESTS}\\n"
+              TEXT+="実行ログ: <${GITHUB_RUN_URL}|GitHub Actions Run>\\n"
+              TEXT+="スクリーンショット・詳細ログ: Actions画面の *Artifacts* と *Logs* をご確認ください。"
+    
+              cat <<EOF > payload.json
+              {
+                "text": "$TEXT"
+              }
+              EOF
+    
+              curl -X POST -H 'Content-type: application/json' --data @payload.json "$SLACK_WEBHOOK_URL"
+    
