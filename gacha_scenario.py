@@ -1,3 +1,4 @@
+import os
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 GACHA_URL = "https://stg.croissant.buzz/gacha/XOkAY2E3"
@@ -11,12 +12,15 @@ def run_gacha_scenario(draw_count: int = 3) -> bool:
     success = False
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        # CI環境（GitHub Actions）では headless=True、ローカルでは False
+        is_ci = os.getenv("CI") == "true"
+        browser = p.chromium.launch(headless=is_ci)
         page = browser.new_page()
 
         try:
             print(f"\n=== ガチャシナリオ開始：{draw_count} 回 ===")
 
+            # ① ページアクセス
             print("① ガチャページにアクセス")
             try:
                 page.goto(GACHA_URL, wait_until="domcontentloaded", timeout=15000)
@@ -81,5 +85,5 @@ def run_gacha_scenario(draw_count: int = 3) -> bool:
 
 
 if __name__ == "__main__":
-    # 直接実行したとき用（手動確認したいとき）
+    # 手動確認用
     run_gacha_scenario(3)
