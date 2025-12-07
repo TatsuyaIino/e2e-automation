@@ -38,74 +38,10 @@ jobs:
         run: |
           pytest -v test_gacha.py --junitxml=report.xml
 
-          - name: Summarize test results
-          if: always()
-          run: |
-            python - << 'PY'
-            import xml.etree.ElementTree as ET
-            import os
-            import re
-  
-            tests = failures = errors = skipped = 0
-            all_tests = []
-            failed_tests = []
-  
-            try:
-                tree = ET.parse('report.xml')
-                root = tree.getroot()
-  
-                # <testsuite> / <testsuites> 両対応
-                if root.tag == "testsuite":
-                    suites = [root]
-                elif root.tag == "testsuites":
-                    suites = list(root)
-                else:
-                    suites = []
-  
-                for suite in suites:
-                    tests += int(suite.attrib.get('tests', 0))
-                    failures += int(suite.attrib.get('failures', 0))
-                    errors += int(suite.attrib.get('errors', 0))
-                    skipped += int(suite.attrib.get('skipped', 0))
-  
-                    for case in suite.iter('testcase'):
-                        name = case.attrib.get('name', '')
-  
-                        # -------------------------
-                        # ☑ 人間向けの表示名に変換
-                        #   test_gacha_scenario[10]
-                        #   → 抽選10回
-                        # -------------------------
-                        m = re.search(r"\[(\d+)\]", name)
-                        if m:
-                            draw = m.group(1)
-                            human_name = f"抽選{draw}回"
-                        else:
-                            human_name = name
-  
-                        all_tests.append(human_name)
-  
-                        # 失敗判定
-                        if case.find("failure") is not None or case.find("error") is not None:
-                            failed_tests.append(human_name)
-  
-            except FileNotFoundError:
-                pass
-  
-            passed_tests = [t for t in all_tests if t not in failed_tests]
-  
-            # 表示用：1行にせず、改行リスト形式へ
-            def format_list(items):
-                return "\\n".join([f"・{x}" for x in items]) if items else "なし"
-  
-            with open(os.environ["GITHUB_ENV"], "a") as f:
-                f.write(f"TEST_TOTAL={tests}\n")
-                f.write(f"TEST_PASSED={len(passed_tests)}\n")
-                f.write(f"TEST_FAILED={len(failed_tests)}\n")
-                f.write(f"TEST_SKIPPED={skipped}\n")
-                f.write("FAILED_TESTS=" + format_list(failed_tests) + "\n")
-                f.write("PASSED_TESTS=" + format_list(passed_tests) + "\n")
-            PY  
+      - name: Summarize test results
+        if: always()
+        run: |
+          python summarize_results.py
 
       - name: Upload screenshots
         if: always()
@@ -121,6 +57,12 @@ jobs:
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPO_NAME: ${{ github.repository }}
           JOB_STATUS: ${{ job.status }}
+          TEST_TOTAL: ${{ env.TEST_TOTAL }}
+          TEST_PASSED: ${{ env.TEST_PASSED }}
+          TEST_FAILED: ${{ env.TEST_FAILED }}
+          TEST_SKIPPED: ${{ env.TEST_SKIPPED }}
+          PASSED_TESTS: ${{ env.PASSED_TESTS }}
+          FAILED_TESTS: ${{ env.FAILED_TESTS }}
         run: |
           if [ -z "$SLACK_WEBHOOK_URL" ]; then
             echo "SLACK_WEBHOOK_URL is not set. Skipping Slack notification."
@@ -138,8 +80,8 @@ jobs:
           TEXT="${EMOJI} *${TITLE}*\\n"
           TEXT+="リポジトリ: \`${REPO_NAME}\`\\n"
           TEXT+="結果: ${TEST_PASSED:-0} 件成功 / ${TEST_FAILED:-0} 件失敗 / 合計 ${TEST_TOTAL:-0} 件（スキップ ${TEST_SKIPPED:-0}）\\n"
-          TEXT+="成功ケース:\n${PASSED_TESTS}\n"
-          TEXT+="失敗ケース:\n${FAILED_TESTS}\n"
+          TEXT+="成功ケース:\\n${PASSED_TESTS}\\n"
+          TEXT+="失敗ケース:\\n${FAILED_TESTS}\\n"
           TEXT+="実行ログ: <${GITHUB_RUN_URL}|GitHub Actions Run>\\n"
           TEXT+="スクリーンショット・詳細ログ: Actions画面の *Artifacts* と *Logs* をご確認ください。"
 
