@@ -92,12 +92,14 @@ jobs:
               f.write("FAILED_TESTS=" + (", ".join(failed_tests) if failed_tests else "なし") + "\n")
           PY
 
-      - name: Upload screenshots
+      - name: Upload screenshots and videos
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gacha-screenshots
-          path: "*.png"
+          name: gacha-artifacts
+          path: |
+            *.png
+            videos/**
 
       - name: Notify Slack
         if: always()

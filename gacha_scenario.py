@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 GACHA_URL = "https://stg.croissant.buzz/gacha/XOkAY2E3"
@@ -8,22 +9,29 @@ def run_gacha_scenario(draw_count: int = 3) -> bool:
     """
     ガチャE2Eシナリオを1本実行する。
     成功したら True、どこかで失敗したら False を返す。
+
+    ついでに:
+      - スクリーンショット: gacha_result_{draw_count}.png
+      - 動画: videos/gacha_draw_{draw_count}.webm
+    を保存する。
     """
     success = False
-    browser = None
-    context = None
 
     with sync_playwright() as p:
         # CI環境（GitHub Actions）では headless=True、ローカルでは False
         is_ci = os.getenv("CI") == "true"
 
+        browser = p.chromium.launch(headless=is_ci)
+
+        # ★ コンテキスト作成時に動画録画を有効化
+        context = browser.new_context(
+            record_video_dir="videos",  # カレント配下の videos/ に保存
+            record_video_size={"width": 1280, "height": 720},
+        )
+
+        page = context.new_page()
+
         try:
-            browser = p.chromium.launch(headless=is_ci)
-
-            # 🎥 動画録画用コンテキスト（videos/ 配下に .webm を保存）
-            context = browser.new_context(record_video_dir="videos/")
-            page = context.new_page()
-
             print(f"\n=== ガチャシナリオ開始：{draw_count} 回 ===")
 
             # ① ページアクセス
@@ -87,11 +95,29 @@ def run_gacha_scenario(draw_count: int = 3) -> bool:
             return success
 
         finally:
-            # 動画クローズ → ブラウザクローズ
-            if context is not None:
+            # ★ 動画を gacha_draw_{draw_count}.webm という名前で保存
+            try:
+                video = page.video  # Videoオブジェクト
+            except Exception:
+                video = None
+
+            # まず context を閉じて動画保存を完了させる
+            try:
                 context.close()
-            if browser is not None:
-                browser.close()
+            except Exception as e:
+                print(f"⚠ コンテキストクローズ時にエラー: {e}")
+
+            if video is not None:
+                try:
+                    videos_dir = Path("videos")
+                    videos_dir.mkdir(exist_ok=True)
+                    final_path = videos_dir / f"gacha_draw_{draw_count}.webm"
+                    video.save_as(final_path)
+                    print(f"🎥 動画保存: {final_path}")
+                except Exception as e:
+                    print(f"⚠ 動画保存に失敗しました: {e}")
+
+            browser.close()
 
 
 if __name__ == "__main__":
